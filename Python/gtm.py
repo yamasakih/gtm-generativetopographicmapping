@@ -3,8 +3,6 @@
 """
 @author: Hiromasa Kaneko
 """
-
-# GTM (generative topographic mapping) class
 import numpy as np
 from scipy.spatial.distance import cdist 
 from scipy.stats import norm, multivariate_normal
@@ -12,19 +10,23 @@ from sklearn.decomposition import PCA
 
 
 class gtm:
-
+    """
+    GTM (generative topographic mapping)
+    """
     def __init__(self, shapeofmap=[30,30], shapeofrbfcenters=[10,10],
                  varianceofrbfs=4, lambdainemalgorithm=0.001,
                  numberofiterations=200, displayflag=1):
-        self.shapeofmap = shapeofmap
-        self.shapeofrbfcenters = shapeofrbfcenters
-        self.varianceofrbfs = varianceofrbfs
-        self.lambdainemalgorithm = lambdainemalgorithm
-        self.numberofiterations = numberofiterations
-        self.displayflag = displayflag
+        self.shape_of_map = shapeofmap
+        self.shape_of_rbf_centers = shapeofrbfcenters
+        self.variance_of_rbfs = varianceofrbfs
+        self.lambdas = lambdainemalgorithm
+        self.iterations = numberofiterations
+        self.do_display = displayflag
 
     def calculate_grids(self, num_x, num_y):
         """
+        Return the coordinates of equally spaced grids
+
         Parameters
         ----------
         num_x : int
@@ -32,7 +34,8 @@ class gtm:
         num_y : int
             number_of_y_grids
         """
-        grids_x, grids_y = np.meshgrid(np.arange(0.0, num_x), np.arange(0.0, num_y))
+        grids_x, grids_y = np.meshgrid(np.arange(0.0, num_x),
+                                       np.arange(0.0, num_y))
         grids = np.c_[np.ndarray.flatten(grids_x)[:, np.newaxis],
                       np.ndarray.flatten(grids_y)[:, np.newaxis]]
         max_grids = grids.max(axis=0)
@@ -51,39 +54,38 @@ class gtm:
         inputdataset = np.array(inputdataset)
         self.successflag = True
         # make rbf grids
-        self.rbfgrids = self.calculate_grids(self.shapeofrbfcenters[0],
-                                             self.shapeofrbfcenters[1])
+        self.rbfgrids = self.calculate_grids(self.shape_of_rbf_centers[0],
+                                             self.shape_of_rbf_centers[1])
 
         # make map grids
-        self.mapgrids = self.calculate_grids(self.shapeofmap[0],
-                                             self.shapeofmap[1])
+        self.mapgrids = self.calculate_grids(self.shape_of_map[0],
+                                             self.shape_of_map[1])
 
         # calculate phi of mapgrids and rbfgrids
-        distancebetweenmapandrbfgrids = cdist(self.mapgrids, self.rbfgrids,
+        dist = cdist(self.mapgrids, self.rbfgrids,
                                               'sqeuclidean')
-        self.phiofmaprbfgrids = np.exp(-distancebetweenmapandrbfgrids / 2.0
-                                        / self.varianceofrbfs)
+        self.phi = np.exp(-dist / 2.0 / self.variance_of_rbfs)
 
         # PCA for initializing W and beta
         pcamodel = PCA(n_components=3)
         pcamodel.fit_transform(inputdataset)
-        if np.linalg.matrix_rank(self.phiofmaprbfgrids) < min(self.phiofmaprbfgrids.shape):
+        if np.linalg.matrix_rank(self.phi) < min(self.phi.shape):
             self.successflag = False
             return
-        self.W = np.linalg.pinv(self.phiofmaprbfgrids).dot(
+        self.W = np.linalg.pinv(self.phi).dot(
                          self.mapgrids.dot(pcamodel.components_[0:2, :]))
         self.beta = min(pcamodel.explained_variance_[2], 1/(
                         (
-                            cdist(self.phiofmaprbfgrids.dot(self.W),
-                            self.phiofmaprbfgrids.dot(self.W))
-                            + np.diag(np.ones(np.prod(self.shapeofmap))*10**100)
+                            cdist(self.phi.dot(self.W),
+                            self.phi.dot(self.W))
+                            + np.diag(np.ones(np.prod(self.shape_of_map))*10**100)
                         ).min(axis=0).mean()/2))
         self.bias = inputdataset.mean(axis=0)
 
         # EM algorithm
-        phiofmaprbfgridswithone = np.c_[self.phiofmaprbfgrids,
-                                        np.ones((np.prod(self.shapeofmap), 1))]
-        for iteration in range(self.numberofiterations):
+        phiofmaprbfgridswithone = np.c_[self.phi,
+                                        np.ones((np.prod(self.shape_of_map), 1))]
+        for iteration in range(self.iterations):
             responsibilities = self.responsibility(inputdataset)
             if responsibilities.sum() == 0:
                 self.successflag = False
@@ -91,7 +93,7 @@ class gtm:
 
             phitGphietc = phiofmaprbfgridswithone.T.dot(
                  np.diag(responsibilities.sum(axis=0)).dot(phiofmaprbfgridswithone)
-                 ) + self.lambdainemalgorithm/self.beta * np.identity(
+                 ) + self.lambdas/self.beta * np.identity(
                 phiofmaprbfgridswithone.shape[1])
             if 1/np.linalg.cond(phitGphietc) < 10**-15:
                 self.successflag = False
@@ -105,9 +107,9 @@ class gtm:
             self.W = self.Wwithone[:-1, :]
             self.bias = self.Wwithone[-1, :]
 
-            if self.displayflag:
+            if self.do_display:
                 print("{0}/{1} ... likelihood: {2}".format(
-                     iteration+1, self.numberofiterations,
+                     iteration+1, self.iterations,
                      self.likelihood(inputdataset)))
 
     def calculate_distance_between_phiW_and_input_distances(self, input_dataset):
@@ -117,8 +119,8 @@ class gtm:
         """
         distance = cdist(
            input_dataset,
-           self.phiofmaprbfgrids.dot(self.W)
-           + np.ones((np.prod(self.shapeofmap), 1)).dot(
+           self.phi.dot(self.W)
+           + np.ones((np.prod(self.shape_of_map), 1)).dot(
                  np.reshape(self.bias, (1, len(self.bias)))
              ),
            'sqeuclidean')
@@ -143,7 +145,6 @@ class gtm:
         distance = self.calculate_distance_between_phiW_and_input_distances(inputdataset)
         rbfforresponsibility = np.exp(-self.beta/2.0*distance)
         sumrbfforresponsibility = rbfforresponsibility.sum(axis=1)
-#        return rbfforresponsibility / np.reshape( sumrbfforresponsibility, (rbfforresponsibility.shape[0],1))
         if np.count_nonzero(sumrbfforresponsibility) == len(sumrbfforresponsibility):
             return rbfforresponsibility / np.reshape(sumrbfforresponsibility,
                         (rbfforresponsibility.shape[0], 1))
@@ -168,7 +169,7 @@ class gtm:
         inputdataset = np.array(inputdataset)
         distance = self.calculate_distance_between_phiW_and_input_distances(inputdataset)
         return (np.log((self.beta/2.0/np.pi)**(inputdataset.shape[1]/2.0) /
-                np.prod(self.shapeofmap) * np.exp(-self.beta/2.0*distance).sum(axis=1))).sum()
+                np.prod(self.shape_of_map) * np.exp(-self.beta/2.0*distance).sum(axis=1))).sum()
 
     def mlr(self, X, y):
         """
@@ -215,8 +216,8 @@ class gtm:
         the GTM map.
         """
 #        targetyvalues = np.ndarray.flatten(np.array(targetyvalues))
-        myu_i = self.phiofmaprbfgrids.dot(self.W) + np.ones(
-        (np.prod(self.shapeofmap), 1)).dot(np.reshape(self.bias, (1, len(self.bias))))
+        myu_i = self.phi.dot(self.W) + np.ones(
+        (np.prod(self.shape_of_map), 1)).dot(np.reshape(self.bias, (1, len(self.bias))))
         sigmai = np.diag(np.ones(len(self.regressioncoefficients))) / self.beta
         invsigmai = np.diag(np.ones(len(self.regressioncoefficients))) * self.beta
         deltai = np.linalg.inv(invsigmai 
@@ -265,8 +266,8 @@ class gtm:
         """
         if self.successflag:
             X = np.array(X)
-            myu_i = self.phiofmaprbfgrids.dot(self.W) + np.ones(
-                                          (np.prod(self.shapeofmap), 1)
+            myu_i = self.phi.dot(self.W) + np.ones(
+                                          (np.prod(self.shape_of_map), 1)
                             ).dot(np.reshape(self.bias, (1, len(self.bias))))
             delta_x = np.diag(np.ones(X.shape[1])) / self.beta
             px = np.empty([X.shape[0], myu_i.shape[0]])
@@ -299,8 +300,8 @@ class gtm:
         py [p(y)] : vector of probability of y given myu_y_i and sigma_y_i,
         which can be used to discuss applicability domains.
         """
-        myu_i = self.phiofmaprbfgrids.dot(self.W) + np.ones(
-           (np.prod(self.shapeofmap), 1)).dot(np.reshape(self.bias, (1, len(self.bias))))
+        myu_i = self.phi.dot(self.W) + np.ones(
+           (np.prod(self.shape_of_map), 1)).dot(np.reshape(self.bias, (1, len(self.bias))))
         delta_y = 1 / self.beta
         py = np.empty(myu_i.shape[0])
         if isinstance(targetyvalue,int) or isinstance(targetyvalue,float):
